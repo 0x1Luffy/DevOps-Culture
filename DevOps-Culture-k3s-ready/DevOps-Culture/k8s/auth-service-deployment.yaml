@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taskflow-auth-service
+  namespace: taskflow
+  labels:
+    app: taskflow
+    component: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: taskflow
+      component: auth-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: taskflow
+        component: auth-service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: auth-service
+        image: 0x1luffy/auth-service-taskflow:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5003
+          name: http
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "5003"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-auth-secret
+              key: JWT_SECRET
+        - name: ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-auth-secret
+              key: ADMIN_USER
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: taskflow-auth-secret
+              key: ADMIN_PASSWORD
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5003
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5003
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL

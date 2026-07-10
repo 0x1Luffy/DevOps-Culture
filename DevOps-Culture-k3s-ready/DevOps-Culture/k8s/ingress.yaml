@@ -1,0 +1,73 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: taskflow-ingress
+  namespace: taskflow
+  labels:
+    app: taskflow
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    # Uncomment after installing cert-manager:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  # Uncomment and fill in your domain for TLS:
+  # tls:
+  # - hosts:
+  #   - taskflow.yourdomain.com
+  #   secretName: taskflow-tls
+  rules:
+  - host: taskflow.yourdomain.com   # Replace with your actual domain
+    http:
+      paths:
+      - path: /api/stats
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-stats-service
+            port:
+              number: 5001
+      - path: /api/notifications
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-notification-service
+            port:
+              number: 5002
+      - path: /api/login
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-auth-service
+            port:
+              number: 5003
+      - path: /api/verify
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-auth-service
+            port:
+              number: 5003
+      - path: /api/status
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-status-service
+            port:
+              number: 5004
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-backend
+            port:
+              number: 5000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: taskflow-frontend
+            port:
+              number: 80

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: taskflow-stats-service
+  namespace: taskflow
+  labels:
+    app: taskflow
+    component: stats-service
+spec:
+  selector:
+    app: taskflow
+    component: stats-service
+  ports:
+  - name: http
+    port: 5001
+    targetPort: 5001
+    protocol: TCP
+  type: ClusterIP

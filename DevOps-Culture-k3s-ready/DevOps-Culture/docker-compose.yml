@@ -1,0 +1,109 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: taskflow-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  backend:
+    build: ./backend
+    container_name: taskflow-backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    networks:
+      default:
+        aliases:
+          - taskflow-backend
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      MONGO_URI: mongodb://mongo:27017/taskflow
+      NOTIFICATION_SERVICE_URL: http://notification-service:5002
+
+  stats-service:
+    build: ./stats-service
+    container_name: taskflow-stats-service
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    networks:
+      default:
+        aliases:
+          - taskflow-stats-service
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      MONGO_URI: mongodb://mongo:27017/taskflow
+
+  notification-service:
+    build: ./notification-service
+    container_name: taskflow-notification-service
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - taskflow-notification-service
+    ports:
+      - "5002:5002"
+    environment:
+      PORT: 5002
+
+  auth-service:
+    build: ./auth-service
+    container_name: taskflow-auth-service
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - taskflow-auth-service
+    ports:
+      - "5003:5003"
+    environment:
+      PORT: 5003
+      JWT_SECRET: dev-secret-change-me
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: admin123
+
+  status-service:
+    build: ./status-service
+    container_name: taskflow-status-service
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - stats-service
+      - notification-service
+      - auth-service
+    networks:
+      default:
+        aliases:
+          - taskflow-status-service
+    ports:
+      - "5004:5004"
+    environment:
+      PORT: 5004
+      BACKEND_HEALTH_URL: http://backend:5000/health
+      STATS_HEALTH_URL: http://stats-service:5001/health
+      NOTIFICATION_HEALTH_URL: http://notification-service:5002/health
+      AUTH_HEALTH_URL: http://auth-service:5003/health
+
+  frontend:
+    build: ./frontend
+    container_name: taskflow-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - stats-service
+      - notification-service
+      - auth-service
+      - status-service
+    ports:
+      - "8080:80"
+
+volumes:
+  mongo-data:

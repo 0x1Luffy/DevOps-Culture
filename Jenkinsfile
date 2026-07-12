@@ -1,12 +1,26 @@
+// Defined at the top level (outside pipeline{}) so it's a plain function call from
+// any stage - no JSON parsing, no serialization across steps, no sandbox restrictions.
+// Just returns a fresh literal map each time it's called.
+def getServices() {
+  return [
+    'backend'             : [image: 'backend-taskflow',              deployment: 'taskflow-backend',              container: 'backend',              manifest: 'backend-deployment.yaml'],
+    'frontend'             : [image: 'frontend-taskflow',            deployment: 'taskflow-frontend',             container: 'frontend',             manifest: 'frontend-deployment.yaml'],
+    'stats-service'        : [image: 'stats-service-taskflow',       deployment: 'taskflow-stats-service',        container: 'stats-service',        manifest: 'stats-service-deployment.yaml'],
+    'notification-service' : [image: 'notification-service-taskflow',deployment: 'taskflow-notification-service', container: 'notification-service', manifest: 'notification-service-deployment.yaml'],
+    'auth-service'         : [image: 'auth-service-taskflow',        deployment: 'taskflow-auth-service',         container: 'auth-service',         manifest: 'auth-service-deployment.yaml'],
+    'status-service'       : [image: 'status-service-taskflow',      deployment: 'taskflow-status-service',       container: 'status-service',       manifest: 'status-service-deployment.yaml'],
+  ]
+}
+
 pipeline {
   agent any
 
   environment {
-    DOCKERHUB_NS  = '0x1luffy'
-    NAMESPACE     = 'taskflow'
-    IMAGE_TAG     = "${env.GIT_COMMIT.take(7)}"   // short SHA, for readable Docker Hub tags
-    FULL_SHA      = "${env.GIT_COMMIT}"            // full SHA, for precise state tracking
-    BASE_DIR      = 'DevOps-Culture-k3s-ready/DevOps-Culture'   // repo not flattened - services live under here
+    DOCKERHUB_NS   = '0x1luffy'
+    NAMESPACE      = 'taskflow'
+    IMAGE_TAG      = "${env.GIT_COMMIT.take(7)}"   // short SHA, for readable Docker Hub tags
+    FULL_SHA       = "${env.GIT_COMMIT}"            // full SHA, for precise state tracking
+    BASE_DIR       = 'DevOps-Culture-k3s-ready/DevOps-Culture'   // repo not flattened - services live under here
     ANNOTATION_KEY = 'deployed-git-commit'   // no dots - avoids jsonpath escaping edge cases entirely
   }
 
@@ -31,16 +45,7 @@ pipeline {
       steps {
         withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
           script {
-            // service name -> dockerhub image suffix, k8s deployment/container names, manifest file
-            def services = [
-              'backend'             : [image: 'backend-taskflow',              deployment: 'taskflow-backend',              container: 'backend',              manifest: 'backend-deployment.yaml'],
-              'frontend'             : [image: 'frontend-taskflow',            deployment: 'taskflow-frontend',             container: 'frontend',             manifest: 'frontend-deployment.yaml'],
-              'stats-service'        : [image: 'stats-service-taskflow',       deployment: 'taskflow-stats-service',        container: 'stats-service',        manifest: 'stats-service-deployment.yaml'],
-              'notification-service' : [image: 'notification-service-taskflow',deployment: 'taskflow-notification-service', container: 'notification-service', manifest: 'notification-service-deployment.yaml'],
-              'auth-service'         : [image: 'auth-service-taskflow',        deployment: 'taskflow-auth-service',         container: 'auth-service',         manifest: 'auth-service-deployment.yaml'],
-              'status-service'       : [image: 'status-service-taskflow',      deployment: 'taskflow-status-service',       container: 'status-service',       manifest: 'status-service-deployment.yaml'],
-            ]
-
+            def services = getServices()
             def changed = []
 
             services.each { svcName, svc ->
@@ -62,8 +67,6 @@ pipeline {
 
               def shaValid = sh(script: "git cat-file -e ${deployedSha} 2>/dev/null", returnStatus: true) == 0
               if (!shaValid) {
-                // Extremely unlikely (would require force-push rewriting history away
-                // from a commit we deployed), but never trust external state blindly.
                 echo "${svcName}: recorded commit ${deployedSha} not found in git history -> building to be safe"
                 changed << svcName
                 return
@@ -83,9 +86,7 @@ pipeline {
             }
 
             echo "Changed services: ${changed}"
-
             env.CHANGED_SERVICES = changed.join(',')
-            writeFile file: 'services.json', text: groovy.json.JsonOutput.toJson(services)
           }
         }
       }
@@ -97,7 +98,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
+          def services = getServices()
           def changed = env.CHANGED_SERVICES.split(',')
 
           def parallelStages = [:]
@@ -131,7 +132,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
+          def services = getServices()
           def changed = env.CHANGED_SERVICES.split(',')
 
           withCredentials([usernamePassword(
@@ -167,7 +168,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
+          def services = getServices()
           def changed = env.CHANGED_SERVICES.split(',')
 
           withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {

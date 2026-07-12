@@ -69,7 +69,7 @@ pipeline {
       }
     }
 
-    stage('Build, Push & Deploy') {
+    stage('Build') {
       when {
         expression { return env.CHANGED_SERVICES?.trim() }
       }
@@ -82,24 +82,75 @@ pipeline {
           changed.each { svcName ->
             def svc = services[svcName]
             parallelStages["${svcName}"] = {
-              stage("${svcName}") {
-                withCredentials([usernamePassword(
-                  credentialsId: 'dockerhub-creds',
-                  usernameVariable: 'DOCKER_USER',
-                  passwordVariable: 'DOCKER_PASS'
-                )]) {
+              stage("build-${svcName}") {
+                // --load pulls the built image into the local docker daemon
+                // (instead of streaming straight to the registry like --push does)
+                // so the Push stage below has something local to push.
+                sh """
+                  docker buildx build \
+                    --platform linux/arm64 \
+                    --load \
+                    -t ${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG} \
+                    -t ${DOCKERHUB_NS}/${svc.image}:latest \
+                    ./${BASE_DIR}/${svcName}
+                """
+              }
+            }
+          }
+          parallel parallelStages
+        }
+      }
+    }
+
+    stage('Push') {
+      when {
+        expression { return env.CHANGED_SERVICES?.trim() }
+      }
+      steps {
+        script {
+          def services = new groovy.json.JsonSlurper().parseText(readFile('services.json'))
+          def changed = env.CHANGED_SERVICES.split(',')
+
+          withCredentials([usernamePassword(
+            credentialsId: 'dockerhub-creds',
+            usernameVariable: 'DOCKER_USER',
+            passwordVariable: 'DOCKER_PASS'
+          )]) {
+            sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+
+            def parallelStages = [:]
+            changed.each { svcName ->
+              def svc = services[svcName]
+              parallelStages["${svcName}"] = {
+                stage("push-${svcName}") {
                   sh """
-                    echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
-                    docker buildx build \
-                      --platform linux/arm64 \
-                      --push \
-                      -t ${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG} \
-                      -t ${DOCKERHUB_NS}/${svc.image}:latest \
-                      ./${BASE_DIR}/${svcName}
+                    docker push ${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG}
+                    docker push ${DOCKERHUB_NS}/${svc.image}:latest
                   """
                 }
+              }
+            }
+            parallel parallelStages
+          }
+        }
+      }
+    }
 
-                withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+    stage('Deploy') {
+      when {
+        expression { return env.CHANGED_SERVICES?.trim() }
+      }
+      steps {
+        script {
+          def services = new groovy.json.JsonSlurper().parseText(readFile('services.json'))
+          def changed = env.CHANGED_SERVICES.split(',')
+
+          withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+            def parallelStages = [:]
+            changed.each { svcName ->
+              def svc = services[svcName]
+              parallelStages["${svcName}"] = {
+                stage("deploy-${svcName}") {
                   sh """
                     kubectl set image deployment/${svc.deployment} ${svc.container}=${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG} -n ${NAMESPACE}
                     kubectl rollout status deployment/${svc.deployment} -n ${NAMESPACE} --timeout=120s
@@ -107,8 +158,8 @@ pipeline {
                 }
               }
             }
+            parallel parallelStages
           }
-          parallel parallelStages
         }
       }
     }

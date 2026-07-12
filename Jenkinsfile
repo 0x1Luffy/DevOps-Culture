@@ -38,13 +38,17 @@ pipeline {
             'status-service'       : [image: 'status-service-taskflow',      deployment: 'taskflow-status-service',       container: 'status-service'],
           ]
 
-          def prevCommit = sh(script: "git rev-parse HEAD~1 2>/dev/null || true", returnStdout: true).trim()
+          // GIT_PREVIOUS_SUCCESSFUL_COMMIT is set by the Jenkins Git plugin — it's the SHA
+          // of the last commit that completed a SUCCESSFUL build, not just the last build.
+          // This means a failed build never causes the next run to lose track of a change:
+          // we always catch up on everything since the last known-good deploy.
+          def prevCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
           def changedFiles
 
           if (prevCommit) {
             changedFiles = sh(script: "git diff --name-only ${prevCommit} HEAD", returnStdout: true).trim()
           } else {
-            changedFiles = '' // no prior commit (first ever build) -> build everything below
+            changedFiles = '' // no previous successful build on record -> build everything below
           }
 
           def changedList = changedFiles ? changedFiles.split('\n') as List : []

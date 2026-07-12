@@ -2,10 +2,12 @@ pipeline {
   agent any
 
   environment {
-    DOCKERHUB_NS = '0x1luffy'
-    NAMESPACE    = 'taskflow'
-    IMAGE_TAG    = "${env.GIT_COMMIT.take(7)}"
-    BASE_DIR     = 'DevOps-Culture-k3s-ready/DevOps-Culture'   // repo not flattened - services live under here
+    DOCKERHUB_NS  = '0x1luffy'
+    NAMESPACE     = 'taskflow'
+    IMAGE_TAG     = "${env.GIT_COMMIT.take(7)}"   // short SHA, for readable Docker Hub tags
+    FULL_SHA      = "${env.GIT_COMMIT}"            // full SHA, for precise state tracking
+    BASE_DIR      = 'DevOps-Culture-k3s-ready/DevOps-Culture'   // repo not flattened - services live under here
+    ANNOTATION_KEY = 'deployed-git-commit'   // no dots - avoids jsonpath escaping edge cases entirely
   }
 
   options {
@@ -27,48 +29,64 @@ pipeline {
 
     stage('Detect changed services') {
       steps {
-        script {
-          // service name -> [dockerhub image suffix, k8s deployment name, container name]
-          def services = [
-            'backend'             : [image: 'backend-taskflow',              deployment: 'taskflow-backend',              container: 'backend'],
-            'frontend'             : [image: 'frontend-taskflow',            deployment: 'taskflow-frontend',             container: 'frontend'],
-            'stats-service'        : [image: 'stats-service-taskflow',       deployment: 'taskflow-stats-service',        container: 'stats-service'],
-            'notification-service' : [image: 'notification-service-taskflow',deployment: 'taskflow-notification-service', container: 'notification-service'],
-            'auth-service'         : [image: 'auth-service-taskflow',        deployment: 'taskflow-auth-service',         container: 'auth-service'],
-            'status-service'       : [image: 'status-service-taskflow',      deployment: 'taskflow-status-service',       container: 'status-service'],
-          ]
+        withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {
+          script {
+            // service name -> dockerhub image suffix, k8s deployment/container names, manifest file
+            def services = [
+              'backend'             : [image: 'backend-taskflow',              deployment: 'taskflow-backend',              container: 'backend',              manifest: 'backend-deployment.yaml'],
+              'frontend'             : [image: 'frontend-taskflow',            deployment: 'taskflow-frontend',             container: 'frontend',             manifest: 'frontend-deployment.yaml'],
+              'stats-service'        : [image: 'stats-service-taskflow',       deployment: 'taskflow-stats-service',        container: 'stats-service',        manifest: 'stats-service-deployment.yaml'],
+              'notification-service' : [image: 'notification-service-taskflow',deployment: 'taskflow-notification-service', container: 'notification-service', manifest: 'notification-service-deployment.yaml'],
+              'auth-service'         : [image: 'auth-service-taskflow',        deployment: 'taskflow-auth-service',         container: 'auth-service',         manifest: 'auth-service-deployment.yaml'],
+              'status-service'       : [image: 'status-service-taskflow',      deployment: 'taskflow-status-service',       container: 'status-service',       manifest: 'status-service-deployment.yaml'],
+            ]
 
-          // GIT_PREVIOUS_SUCCESSFUL_COMMIT is set by the Jenkins Git plugin — it's the SHA
-          // of the last commit that completed a SUCCESSFUL build, not just the last build.
-          // This means a failed build never causes the next run to lose track of a change:
-          // we always catch up on everything since the last known-good deploy.
-          def prevCommit = env.GIT_PREVIOUS_SUCCESSFUL_COMMIT ?: ''
-          def changedFiles
+            def changed = []
 
-          if (prevCommit) {
-            changedFiles = sh(script: "git diff --name-only ${prevCommit} HEAD", returnStdout: true).trim()
-          } else {
-            changedFiles = '' // no previous successful build on record -> build everything below
-          }
+            services.each { svcName, svc ->
+              // Read OUR OWN annotation off the live Deployment — not the image tag.
+              // We are the only writer of this annotation (set in the Deploy stage,
+              // only after a rollout succeeds), so it's guaranteed to be a clean full
+              // SHA whenever it's present. No dependency on any tagging scheme used
+              // by deploy.sh, manual pushes, or anything else outside this pipeline.
+              def deployedSha = sh(
+                script: "kubectl get deployment/${svc.deployment} -n ${NAMESPACE} -o jsonpath=\"{.metadata.annotations.${ANNOTATION_KEY}}\" 2>/dev/null || true",
+                returnStdout: true
+              ).trim()
 
-          def changedList = changedFiles ? changedFiles.split('\n') as List : []
+              if (!deployedSha) {
+                echo "${svcName}: no pipeline-managed deployment record found -> building"
+                changed << svcName
+                return
+              }
 
-          def changed
-          if (!prevCommit) {
-            changed = services.keySet() as List
-          } else if (changedList.any { it.startsWith("${env.BASE_DIR}/k8s/") }) {
-            // shared manifests changed -> safest to redeploy every service
-            changed = services.keySet() as List
-          } else {
-            changed = services.keySet().findAll { svc ->
-              changedList.any { it.startsWith("${env.BASE_DIR}/${svc}/") }
+              def shaValid = sh(script: "git cat-file -e ${deployedSha} 2>/dev/null", returnStatus: true) == 0
+              if (!shaValid) {
+                // Extremely unlikely (would require force-push rewriting history away
+                // from a commit we deployed), but never trust external state blindly.
+                echo "${svcName}: recorded commit ${deployedSha} not found in git history -> building to be safe"
+                changed << svcName
+                return
+              }
+
+              // Diff both the service's source folder AND its own k8s manifest against
+              // the commit we last successfully deployed.
+              def diffCmd = "git diff --quiet ${deployedSha} HEAD -- ${env.BASE_DIR}/${svcName}/ ${env.BASE_DIR}/k8s/${svc.manifest}"
+              def diffExit = sh(script: diffCmd, returnStatus: true)
+
+              if (diffExit != 0) {
+                echo "${svcName}: drift detected (last deployed=${deployedSha}) -> building"
+                changed << svcName
+              } else {
+                echo "${svcName}: matches last deployed commit ${deployedSha} -> skipping"
+              }
             }
+
+            echo "Changed services: ${changed}"
+
+            env.CHANGED_SERVICES = changed.join(',')
+            writeFile file: 'services.json', text: groovy.json.JsonOutput.toJson(services)
           }
-
-          echo "Changed services: ${changed}"
-
-          env.CHANGED_SERVICES = changed.join(',')
-          writeFile file: 'services.json', text: groovy.json.JsonOutput.toJson(services)
         }
       }
     }
@@ -91,6 +109,7 @@ pipeline {
                 // (instead of streaming straight to the registry like --push does)
                 // so the Push stage below has something local to push.
                 sh """
+                  set -e
                   docker buildx build \
                     --platform linux/arm64 \
                     --load \
@@ -120,7 +139,7 @@ pipeline {
             usernameVariable: 'DOCKER_USER',
             passwordVariable: 'DOCKER_PASS'
           )]) {
-            sh 'echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
+            sh 'set -e; echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin'
 
             def parallelStages = [:]
             changed.each { svcName ->
@@ -128,6 +147,7 @@ pipeline {
               parallelStages["${svcName}"] = {
                 stage("push-${svcName}") {
                   sh """
+                    set -e
                     docker push ${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG}
                     docker push ${DOCKERHUB_NS}/${svc.image}:latest
                   """
@@ -136,6 +156,7 @@ pipeline {
             }
             parallel parallelStages
           }
+          sh 'docker logout || true'
         }
       }
     }
@@ -156,8 +177,10 @@ pipeline {
               parallelStages["${svcName}"] = {
                 stage("deploy-${svcName}") {
                   sh """
+                    set -e
                     kubectl set image deployment/${svc.deployment} ${svc.container}=${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG} -n ${NAMESPACE}
                     kubectl rollout status deployment/${svc.deployment} -n ${NAMESPACE} --timeout=120s
+                    kubectl annotate deployment/${svc.deployment} -n ${NAMESPACE} ${ANNOTATION_KEY}=${FULL_SHA} --overwrite
                   """
                 }
               }

@@ -75,7 +75,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurper().parseText(readFile('services.json'))
+          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
           def changed = env.CHANGED_SERVICES.split(',')
 
           def parallelStages = [:]
@@ -108,7 +108,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurper().parseText(readFile('services.json'))
+          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
           def changed = env.CHANGED_SERVICES.split(',')
 
           withCredentials([usernamePassword(
@@ -142,7 +142,7 @@ pipeline {
       }
       steps {
         script {
-          def services = new groovy.json.JsonSlurper().parseText(readFile('services.json'))
+          def services = new groovy.json.JsonSlurperClassic().parseText(readFile('services.json'))
           def changed = env.CHANGED_SERVICES.split(',')
 
           withCredentials([file(credentialsId: 'k3s-kubeconfig', variable: 'KUBECONFIG')]) {

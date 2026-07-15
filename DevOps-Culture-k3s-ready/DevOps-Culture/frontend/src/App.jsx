@@ -139,7 +139,7 @@ function App() {
       <section className="hero-panel">
         <div>
           <p className="eyebrow">TaskFlow</p>
-          <h1>Operations dashboard Testing CI/CD</h1>
+          <h1>Operations dashboard</h1>
         </div>
         <button className="secondary-button" onClick={refreshDashboard}>Refresh</button>
       </section>

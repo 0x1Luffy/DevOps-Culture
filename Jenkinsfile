@@ -180,7 +180,7 @@ pipeline {
                   sh """
                     set -e
                     kubectl set image deployment/${svc.deployment} ${svc.container}=${DOCKERHUB_NS}/${svc.image}:${IMAGE_TAG} -n ${NAMESPACE}
-                    kubectl rollout status deployment/${svc.deployment} -n ${NAMESPACE} --timeout=120s
+                    kubectl rollout status deployment/${svc.deployment} -n ${NAMESPACE} --timeout=300s
                     kubectl annotate deployment/${svc.deployment} -n ${NAMESPACE} ${ANNOTATION_KEY}=${FULL_SHA} --overwrite
                   """
                 }
